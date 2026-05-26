@@ -1,0 +1,219 @@
+<script>
+(function () {
+  const state = {
+    name: 'BOOT',
+    hasPat: false,
+    repoBinding: null,
+    repos: null,
+    repoFilter: '',
+    error: null,
+  };
+
+  const root = document.getElementById('app');
+
+  function call(fn, ...args) {
+    return new Promise((res, rej) =>
+      google.script.run
+        .withSuccessHandler(r => r.ok ? res(r.data) : rej(r.error))
+        .withFailureHandler(rej)
+        [fn](...args));
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function setState(patch) {
+    Object.assign(state, patch);
+    render();
+  }
+
+  function transition(name, patch) {
+    setState(Object.assign({ name }, patch || {}));
+    onEnter(name);
+  }
+
+  function bannerHtml() {
+    return state.error ? '<div class="banner">' + esc(state.error) + '</div>' : '';
+  }
+
+  function render() {
+    if (state.name === 'BOOT') return renderBoot();
+    if (state.name === 'NEED_PAT') return renderNeedPat();
+    if (state.name === 'NEED_REPO') return renderNeedRepo();
+    if (state.name === 'READY') return renderReady();
+  }
+
+  function renderBoot() {
+    root.innerHTML = '<p class="muted">Loading…</p>';
+  }
+
+  function renderNeedPat() {
+    root.innerHTML = [
+      bannerHtml(),
+      '<h1>Connect GitHub</h1>',
+      '<p class="muted">Paste a fine-grained personal access token with <b>Contents: Read &amp; Write</b> and <b>Metadata: Read</b> on the target repo.</p>',
+      '<p class="muted"><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create token on GitHub →</a></p>',
+      '<div class="field">',
+      '  <label for="pat-input">Personal access token</label>',
+      '  <textarea id="pat-input" placeholder="github_pat_..." spellcheck="false"></textarea>',
+      '</div>',
+      '<button class="primary" id="pat-save">Save</button>',
+    ].join('');
+
+    const input = document.getElementById('pat-input');
+    const btn = document.getElementById('pat-save');
+    btn.onclick = async () => {
+      const value = (input.value || '').trim();
+      if (!value) return;
+      btn.disabled = true;
+      try {
+        await call('apiSavePat', value);
+        transition('BOOT', { error: null });
+      } catch (err) {
+        setState({ error: (err && err.message) || 'Failed to save token' });
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    input.focus();
+  }
+
+  function renderNeedRepo() {
+    const repos = state.repos;
+    let body;
+    if (repos === null) {
+      body = '<p class="muted">Loading repos…</p>';
+    } else if (repos.length === 0) {
+      body = '<p class="muted">No repositories accessible with this token.</p>';
+    } else {
+      const filter = state.repoFilter.trim().toLowerCase();
+      const visible = filter
+        ? repos.filter(r => r.fullName.toLowerCase().indexOf(filter) !== -1)
+        : repos;
+      const items = visible.map((r, i) =>
+        '<button class="repo-item" data-index="' + i + '">' +
+          '<span class="full">' + esc(r.fullName) + '</span>' +
+          '<span class="branch">' + esc(r.defaultBranch || '') + (r.private ? ' · private' : '') + '</span>' +
+        '</button>'
+      ).join('');
+      body = [
+        '<div class="field">',
+        '  <input id="repo-filter" type="text" placeholder="Filter repos…" value="' + esc(state.repoFilter) + '">',
+        '</div>',
+        '<div class="repo-list" id="repo-list">' + (items || '<p class="muted" style="padding:8px">No matches.</p>') + '</div>',
+      ].join('');
+
+      // attach handlers after innerHTML
+      setTimeout(() => {
+        const filterEl = document.getElementById('repo-filter');
+        if (filterEl) {
+          filterEl.oninput = e => setState({ repoFilter: e.target.value });
+          filterEl.focus();
+          const len = filterEl.value.length;
+          try { filterEl.setSelectionRange(len, len); } catch (_) {}
+        }
+        const list = document.getElementById('repo-list');
+        if (list) {
+          list.querySelectorAll('.repo-item').forEach(el => {
+            el.onclick = () => {
+              const idx = Number(el.getAttribute('data-index'));
+              const repo = visible[idx];
+              bindRepo(repo);
+            };
+          });
+        }
+      }, 0);
+    }
+
+    root.innerHTML = [
+      bannerHtml(),
+      '<h1>Choose repository</h1>',
+      body,
+    ].join('');
+  }
+
+  function renderReady() {
+    const b = state.repoBinding || {};
+    root.innerHTML = [
+      bannerHtml(),
+      '<div class="header">',
+      '  <h1>' + esc(b.owner + '/' + b.name) + '</h1>',
+      '  <div class="actions">',
+      '    <a id="unbind">Unbind</a>',
+      '    <a id="signout">Sign out</a>',
+      '  </div>',
+      '</div>',
+      '<p class="muted">Branch UI coming in stage 3.</p>',
+    ].join('');
+
+    document.getElementById('unbind').onclick = async () => {
+      try {
+        await call('apiUnbindRepo');
+        transition('BOOT', { error: null });
+      } catch (err) {
+        setState({ error: (err && err.message) || 'Unbind failed' });
+      }
+    };
+    document.getElementById('signout').onclick = async () => {
+      try {
+        await call('apiClearPat');
+        transition('BOOT', { error: null });
+      } catch (err) {
+        setState({ error: (err && err.message) || 'Sign out failed' });
+      }
+    };
+  }
+
+  async function bindRepo(repo) {
+    try {
+      await call('apiBindRepo', { owner: repo.owner, name: repo.name });
+      transition('BOOT', { error: null, repos: null, repoFilter: '' });
+    } catch (err) {
+      setState({ error: (err && err.message) || 'Bind failed' });
+    }
+  }
+
+  async function loadRepos() {
+    try {
+      const data = await call('apiListRepos');
+      setState({ repos: data.repos, error: null });
+    } catch (err) {
+      // invalid PAT or network — drop PAT and bounce to NEED_PAT
+      try { await call('apiClearPat'); } catch (_) {}
+      transition('NEED_PAT', {
+        hasPat: false,
+        repos: null,
+        error: (err && err.message) || 'Failed to load repositories',
+      });
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      const data = await call('apiBootstrap');
+      const { hasPat, repoBinding } = data;
+      if (!hasPat) {
+        transition('NEED_PAT', { hasPat: false, repoBinding: null });
+      } else if (!repoBinding) {
+        transition('NEED_REPO', { hasPat: true, repoBinding: null, repos: null, repoFilter: '' });
+      } else {
+        transition('READY', { hasPat: true, repoBinding });
+      }
+    } catch (err) {
+      setState({ error: (err && err.message) || 'Bootstrap failed' });
+    }
+  }
+
+  function onEnter(name) {
+    if (name === 'BOOT') bootstrap();
+    else if (name === 'NEED_REPO' && state.repos === null) loadRepos();
+  }
+
+  // initial
+  render();
+  onEnter('BOOT');
+})();
+</script>
