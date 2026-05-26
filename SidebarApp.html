@@ -7,6 +7,7 @@
     repos: null,
     repoFilter: '',
     error: null,
+    dumpJson: null,
   };
 
   const root = document.getElementById('app');
@@ -137,6 +138,9 @@
 
   function renderReady() {
     const b = state.repoBinding || {};
+    const dumpHtml = state.dumpJson != null
+      ? '<pre id="dump">' + esc(state.dumpJson) + '</pre>'
+      : '';
     root.innerHTML = [
       bannerHtml(),
       '<div class="header">',
@@ -147,12 +151,14 @@
       '  </div>',
       '</div>',
       '<p class="muted">Branch UI coming in stage 3.</p>',
+      '<button id="dump-btn" class="primary" style="align-self:flex-start">Dump JSON</button>',
+      dumpHtml,
     ].join('');
 
     document.getElementById('unbind').onclick = async () => {
       try {
         await call('apiUnbindRepo');
-        transition('BOOT', { error: null });
+        transition('BOOT', { error: null, dumpJson: null });
       } catch (err) {
         setState({ error: (err && err.message) || 'Unbind failed' });
       }
@@ -160,9 +166,21 @@
     document.getElementById('signout').onclick = async () => {
       try {
         await call('apiClearPat');
-        transition('BOOT', { error: null });
+        transition('BOOT', { error: null, dumpJson: null });
       } catch (err) {
         setState({ error: (err && err.message) || 'Sign out failed' });
+      }
+    };
+    const dumpBtn = document.getElementById('dump-btn');
+    dumpBtn.onclick = async () => {
+      dumpBtn.disabled = true;
+      try {
+        const data = await call('apiDebugSerialize');
+        setState({ dumpJson: data.json, error: null });
+      } catch (err) {
+        setState({ error: (err && err.message) || 'Serialize failed' });
+      } finally {
+        dumpBtn.disabled = false;
       }
     };
   }
