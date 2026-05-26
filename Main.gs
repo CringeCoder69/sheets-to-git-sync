@@ -12,3 +12,7 @@ function showSidebar() {
     .setTitle('Git Sync');
   SpreadsheetApp.getUi().showSidebar(html);
 }
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
