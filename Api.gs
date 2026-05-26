@@ -69,8 +69,24 @@ function apiUnbindRepo() {
   });
 }
 
-function apiDebugSerialize() {
+function apiListBranches() {
   return _wrap(function () {
-    return { json: JSON.stringify(serializeActiveSpreadsheet(), null, 2) };
+    if (!getPat()) throw { name: 'AppError', message: 'PAT is not set', code: 'NoPat' };
+    const binding = getRepoBinding();
+    if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
+    return { branches: listBranches(binding.owner, binding.name) };
+  });
+}
+
+function apiCommit(req) {
+  return _wrap(function () {
+    if (!getPat()) throw { name: 'AppError', message: 'PAT is not set', code: 'NoPat' };
+    const binding = getRepoBinding();
+    if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
+    const branch = req && typeof req.branch === 'string' ? req.branch.trim() : '';
+    const message = req && typeof req.message === 'string' ? req.message.trim() : '';
+    if (!branch) throw { name: 'AppError', message: 'branch is required', code: 'BadInput' };
+    if (!message) throw { name: 'AppError', message: 'commit message is required', code: 'BadInput' };
+    return commitSnapshot({ owner: binding.owner, repo: binding.name, branch: branch, message: message });
   });
 }

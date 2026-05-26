@@ -6,8 +6,14 @@
     repoBinding: null,
     repos: null,
     repoFilter: '',
+    branches: null,
+    selectedBranch: null,
+    lastCommitSha: null,
+    modal: null,
+    modalError: null,
+    committing: false,
+    commitMessage: '',
     error: null,
-    dumpJson: null,
   };
 
   const root = document.getElementById('app');
@@ -24,6 +30,10 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function shortSha(sha) {
+    return sha ? String(sha).slice(0, 7) : '';
   }
 
   function setState(patch) {
@@ -107,7 +117,6 @@
         '<div class="repo-list" id="repo-list">' + (items || '<p class="muted" style="padding:8px">No matches.</p>') + '</div>',
       ].join('');
 
-      // attach handlers after innerHTML
       setTimeout(() => {
         const filterEl = document.getElementById('repo-filter');
         if (filterEl) {
@@ -138,9 +147,38 @@
 
   function renderReady() {
     const b = state.repoBinding || {};
-    const dumpHtml = state.dumpJson != null
-      ? '<pre id="dump">' + esc(state.dumpJson) + '</pre>'
+
+    let branchHtml;
+    if (state.branches === null) {
+      branchHtml = '<p class="muted">Loading branches…</p>';
+    } else if (state.branches.length === 0) {
+      branchHtml = '<p class="muted">No branches in this repository.</p>';
+    } else {
+      const opts = state.branches.map(br =>
+        '<option value="' + esc(br.name) + '"' +
+        (br.name === state.selectedBranch ? ' selected' : '') +
+        '>' + esc(br.name) + '</option>'
+      ).join('');
+      branchHtml = [
+        '<div class="field">',
+        '  <label for="branch-select">Branch</label>',
+        '  <div class="row">',
+        '    <select id="branch-select">' + opts + '</select>',
+        '    <button class="secondary" id="branch-refresh">Refresh</button>',
+        '  </div>',
+        '</div>',
+      ].join('');
+    }
+
+    const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch;
+    const commitBtnHtml =
+      '<button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') +
+      ' style="align-self:flex-start">Commit current sheet…</button>';
+
+    const statusHtml = state.lastCommitSha
+      ? '<p class="status">Committed <code>' + esc(shortSha(state.lastCommitSha)) + '</code></p>'
       : '';
+
     root.innerHTML = [
       bannerHtml(),
       '<div class="header">',
@@ -150,15 +188,16 @@
       '    <a id="signout">Sign out</a>',
       '  </div>',
       '</div>',
-      '<p class="muted">Branch UI coming in stage 3.</p>',
-      '<button id="dump-btn" class="primary" style="align-self:flex-start">Dump JSON</button>',
-      dumpHtml,
+      branchHtml,
+      commitBtnHtml,
+      statusHtml,
+      state.modal === 'commit' ? commitModalHtml() : '',
     ].join('');
 
     document.getElementById('unbind').onclick = async () => {
       try {
         await call('apiUnbindRepo');
-        transition('BOOT', { error: null, dumpJson: null });
+        transition('BOOT', resetAfterRepoChange());
       } catch (err) {
         setState({ error: (err && err.message) || 'Unbind failed' });
       }
@@ -166,29 +205,110 @@
     document.getElementById('signout').onclick = async () => {
       try {
         await call('apiClearPat');
-        transition('BOOT', { error: null, dumpJson: null });
+        transition('BOOT', resetAfterRepoChange());
       } catch (err) {
         setState({ error: (err && err.message) || 'Sign out failed' });
       }
     };
-    const dumpBtn = document.getElementById('dump-btn');
-    dumpBtn.onclick = async () => {
-      dumpBtn.disabled = true;
-      try {
-        const data = await call('apiDebugSerialize');
-        setState({ dumpJson: data.json, error: null });
-      } catch (err) {
-        setState({ error: (err && err.message) || 'Serialize failed' });
-      } finally {
-        dumpBtn.disabled = false;
-      }
-    };
+
+    const select = document.getElementById('branch-select');
+    if (select) {
+      select.onchange = e => setState({ selectedBranch: e.target.value });
+    }
+    const refreshBtn = document.getElementById('branch-refresh');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        setState({ branches: null, selectedBranch: null });
+        loadBranches();
+      };
+    }
+
+    const commitBtn = document.getElementById('commit-btn');
+    if (commitBtn) {
+      commitBtn.onclick = () => setState({
+        modal: 'commit',
+        modalError: null,
+        commitMessage: '',
+      });
+    }
+
+    if (state.modal === 'commit') wireCommitModal();
+  }
+
+  function commitModalHtml() {
+    const errHtml = state.modalError
+      ? '<div class="banner">' + esc(state.modalError) + '</div>'
+      : '';
+    const disableCommit = state.committing || !state.commitMessage.trim();
+    return [
+      '<div class="modal-backdrop">',
+      '  <div class="modal">',
+      '    <h2>Commit to <code>' + esc(state.selectedBranch || '') + '</code></h2>',
+      errHtml,
+      '    <div class="field">',
+      '      <label for="commit-message">Message</label>',
+      '      <textarea id="commit-message" placeholder="Describe the change…">' + esc(state.commitMessage) + '</textarea>',
+      '    </div>',
+      '    <div class="modal-actions">',
+      '      <button class="secondary" id="commit-cancel"' + (state.committing ? ' disabled' : '') + '>Cancel</button>',
+      '      <button class="primary" id="commit-confirm"' + (disableCommit ? ' disabled' : '') + '>',
+                state.committing ? 'Committing…' : 'Commit',
+      '      </button>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
+  function wireCommitModal() {
+    const messageEl = document.getElementById('commit-message');
+    const confirmBtn = document.getElementById('commit-confirm');
+    const cancelBtn = document.getElementById('commit-cancel');
+
+    if (messageEl) {
+      messageEl.oninput = e => {
+        state.commitMessage = e.target.value;
+        confirmBtn.disabled = state.committing || !state.commitMessage.trim();
+      };
+      messageEl.focus();
+      const len = messageEl.value.length;
+      try { messageEl.setSelectionRange(len, len); } catch (_) {}
+    }
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        if (state.committing) return;
+        setState({ modal: null, modalError: null, commitMessage: '' });
+      };
+    }
+    if (confirmBtn) {
+      confirmBtn.onclick = async () => {
+        const msg = (state.commitMessage || '').trim();
+        if (!msg) return;
+        setState({ committing: true, modalError: null });
+        try {
+          const data = await call('apiCommit', { branch: state.selectedBranch, message: msg });
+          setState({
+            committing: false,
+            modal: null,
+            modalError: null,
+            commitMessage: '',
+            lastCommitSha: data.newSha,
+            error: null,
+          });
+        } catch (err) {
+          setState({
+            committing: false,
+            modalError: (err && err.message) || 'Commit failed',
+          });
+        }
+      };
+    }
   }
 
   async function bindRepo(repo) {
     try {
       await call('apiBindRepo', { owner: repo.owner, name: repo.name });
-      transition('BOOT', { error: null, repos: null, repoFilter: '' });
+      transition('BOOT', resetAfterRepoChange());
     } catch (err) {
       setState({ error: (err && err.message) || 'Bind failed' });
     }
@@ -199,12 +319,29 @@
       const data = await call('apiListRepos');
       setState({ repos: data.repos, error: null });
     } catch (err) {
-      // invalid PAT or network — drop PAT and bounce to NEED_PAT
       try { await call('apiClearPat'); } catch (_) {}
       transition('NEED_PAT', {
         hasPat: false,
         repos: null,
         error: (err && err.message) || 'Failed to load repositories',
+      });
+    }
+  }
+
+  async function loadBranches() {
+    try {
+      const data = await call('apiListBranches');
+      const branches = data.branches || [];
+      setState({
+        branches: branches,
+        selectedBranch: branches.length ? branches[0].name : null,
+        error: null,
+      });
+    } catch (err) {
+      setState({
+        branches: [],
+        selectedBranch: null,
+        error: (err && err.message) || 'Failed to load branches',
       });
     }
   }
@@ -218,19 +355,34 @@
       } else if (!repoBinding) {
         transition('NEED_REPO', { hasPat: true, repoBinding: null, repos: null, repoFilter: '' });
       } else {
-        transition('READY', { hasPat: true, repoBinding });
+        transition('READY', { hasPat: true, repoBinding: repoBinding });
       }
     } catch (err) {
       setState({ error: (err && err.message) || 'Bootstrap failed' });
     }
   }
 
+  function resetAfterRepoChange() {
+    return {
+      error: null,
+      repos: null,
+      repoFilter: '',
+      branches: null,
+      selectedBranch: null,
+      lastCommitSha: null,
+      modal: null,
+      modalError: null,
+      commitMessage: '',
+      committing: false,
+    };
+  }
+
   function onEnter(name) {
     if (name === 'BOOT') bootstrap();
     else if (name === 'NEED_REPO' && state.repos === null) loadRepos();
+    else if (name === 'READY' && state.branches === null) loadBranches();
   }
 
-  // initial
   render();
   onEnter('BOOT');
 })();

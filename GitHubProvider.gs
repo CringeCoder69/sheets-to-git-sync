@@ -9,9 +9,10 @@ function GitHubError(status, body) {
 }
 GitHubError.prototype = Object.create(Error.prototype);
 
-function _request(method, url) {
+function _request(method, path, body) {
   const pat = getPat();
-  const response = UrlFetchApp.fetch(url, {
+  const url = path.indexOf('http') === 0 ? path : (GITHUB_API + path);
+  const opts = {
     method: method,
     headers: {
       'Authorization': 'token ' + pat,
@@ -20,17 +21,22 @@ function _request(method, url) {
     },
     muteHttpExceptions: true,
     followRedirects: true,
-  });
+  };
+  if (body != null) {
+    opts.contentType = 'application/json';
+    opts.payload = JSON.stringify(body);
+  }
+  const response = UrlFetchApp.fetch(url, opts);
   const status = response.getResponseCode();
   const text = response.getContentText();
-  let body = null;
+  let parsed = null;
   if (text) {
-    try { body = JSON.parse(text); } catch (e) { body = { raw: text }; }
+    try { parsed = JSON.parse(text); } catch (e) { parsed = { raw: text }; }
   }
   if (status < 200 || status >= 300) {
-    throw new GitHubError(status, body);
+    throw new GitHubError(status, parsed);
   }
-  return { status, body, headers: response.getAllHeaders() };
+  return { status: status, body: parsed, headers: response.getAllHeaders() };
 }
 
 function _parseNextLink(headers) {
@@ -46,9 +52,9 @@ function _parseNextLink(headers) {
 
 function listRepos() {
   const results = [];
-  let url = GITHUB_API + '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member';
-  while (url) {
-    const res = _request('get', url);
+  let path = '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member';
+  while (path) {
+    const res = _request('get', path, null);
     const page = res.body || [];
     for (let i = 0; i < page.length; i++) {
       const r = page[i];
@@ -61,7 +67,76 @@ function listRepos() {
         defaultBranch: r.default_branch,
       });
     }
-    url = _parseNextLink(res.headers);
+    path = _parseNextLink(res.headers);
   }
   return results;
+}
+
+function listBranches(owner, repo) {
+  const results = [];
+  let path = '/repos/' + owner + '/' + repo + '/branches?per_page=100';
+  while (path) {
+    const res = _request('get', path, null);
+    const page = res.body || [];
+    for (let i = 0; i < page.length; i++) {
+      const b = page[i];
+      results.push({
+        name: b.name,
+        sha: b.commit && b.commit.sha,
+        protected: !!b.protected,
+      });
+    }
+    path = _parseNextLink(res.headers);
+  }
+  return results;
+}
+
+function getRef(owner, repo, branch) {
+  const res = _request('get', '/repos/' + owner + '/' + repo + '/git/ref/heads/' + encodeURIComponent(branch), null);
+  const b = res.body;
+  return { ref: b.ref, sha: b.object && b.object.sha };
+}
+
+function getCommit(owner, repo, sha) {
+  const res = _request('get', '/repos/' + owner + '/' + repo + '/git/commits/' + sha, null);
+  const b = res.body;
+  return {
+    sha: b.sha,
+    treeSha: b.tree && b.tree.sha,
+    message: b.message,
+    parents: (b.parents || []).map(function (p) { return p.sha; }),
+  };
+}
+
+function createBlob(owner, repo, content) {
+  const res = _request('post', '/repos/' + owner + '/' + repo + '/git/blobs', {
+    content: content,
+    encoding: 'utf-8',
+  });
+  return { sha: res.body.sha };
+}
+
+function createTree(owner, repo, baseTreeSha, entries) {
+  const payload = { tree: entries };
+  if (baseTreeSha) payload.base_tree = baseTreeSha;
+  const res = _request('post', '/repos/' + owner + '/' + repo + '/git/trees', payload);
+  return { sha: res.body.sha };
+}
+
+function createCommit(owner, repo, message, treeSha, parentSha) {
+  const payload = {
+    message: message,
+    tree: treeSha,
+    parents: parentSha ? [parentSha] : [],
+  };
+  const res = _request('post', '/repos/' + owner + '/' + repo + '/git/commits', payload);
+  return { sha: res.body.sha };
+}
+
+function updateRef(owner, repo, branch, sha) {
+  const res = _request('patch', '/repos/' + owner + '/' + repo + '/git/refs/heads/' + encodeURIComponent(branch), {
+    sha: sha,
+    force: false,
+  });
+  return { sha: res.body.object && res.body.object.sha };
 }
