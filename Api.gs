@@ -68,3 +68,9 @@ function apiUnbindRepo() {
     return {};
   });
 }
+
+function apiDebugSerialize() {
+  return _wrap(function () {
+    return { json: JSON.stringify(serializeActiveSpreadsheet(), null, 2) };
+  });
+}
