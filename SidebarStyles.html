@@ -4,25 +4,36 @@
   #app { padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 100vh; }
 
   h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px 0; }
   p { margin: 0; }
+  code { font-family: 'Roboto Mono', Menlo, monospace; font-size: 12px; }
   .muted { color: #5f6368; font-size: 12px; }
   a { color: #1a73e8; text-decoration: none; cursor: pointer; }
   a:hover { text-decoration: underline; }
 
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-weight: 500; }
-  textarea, input[type="text"] {
+  textarea, input[type="text"], select {
     width: 100%; font-family: inherit; font-size: 12px;
     border: 1px solid #dadce0; border-radius: 4px; padding: 6px 8px;
-    resize: vertical;
+    background: #fff;
   }
-  textarea { min-height: 64px; }
+  textarea { min-height: 64px; resize: vertical; }
+
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row select { flex: 1; }
 
   button.primary {
     background: #1a73e8; color: #fff; border: 0; border-radius: 4px;
     padding: 8px 12px; cursor: pointer; font-size: 13px; font-weight: 500;
   }
   button.primary:disabled { background: #c4d6f5; cursor: default; }
+  button.secondary {
+    background: #fff; color: #1a73e8; border: 1px solid #dadce0;
+    border-radius: 4px; padding: 7px 12px; cursor: pointer;
+    font-size: 13px; font-weight: 500;
+  }
+  button.secondary:disabled { color: #9aa0a6; cursor: default; }
 
   .banner {
     background: #fce8e6; color: #b3261e; padding: 6px 8px;
@@ -31,6 +42,9 @@
 
   .header { display: flex; justify-content: space-between; align-items: center; }
   .header .actions { display: flex; gap: 10px; }
+
+  .status { font-size: 12px; color: #5f6368; }
+  .status code { background: #f1f3f4; padding: 1px 4px; border-radius: 3px; }
 
   .repo-list {
     display: flex; flex-direction: column; gap: 2px;
@@ -47,18 +61,18 @@
   .repo-item .full { font-weight: 500; }
   .repo-item .branch { font-size: 11px; color: #5f6368; }
 
-  pre#dump {
-    margin: 0;
-    background: #f8f9fa;
-    border: 1px solid #dadce0;
-    border-radius: 4px;
-    padding: 8px;
-    font-family: 'Roboto Mono', Menlo, monospace;
-    font-size: 11px;
-    line-height: 1.4;
-    max-height: 50vh;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(32, 33, 36, 0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; z-index: 100;
+  }
+  .modal {
+    background: #fff; border-radius: 6px; padding: 16px;
+    width: 100%; max-width: 360px;
+    display: flex; flex-direction: column; gap: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  }
+  .modal-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
   }
 </style>
