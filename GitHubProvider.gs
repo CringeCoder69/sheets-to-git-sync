@@ -91,10 +91,25 @@ function listBranches(owner, repo) {
   return results;
 }
 
-function getRef(owner, repo, branch) {
-  const res = _request('get', '/repos/' + owner + '/' + repo + '/git/ref/heads/' + encodeURIComponent(branch), null);
-  const b = res.body;
-  return { ref: b.ref, sha: b.object && b.object.sha };
+function listCommits(owner, repo, branch, perPage) {
+  const n = Math.max(1, Math.min(perPage || 50, 100));
+  const path = '/repos/' + owner + '/' + repo + '/commits' +
+    '?sha=' + encodeURIComponent(branch) +
+    '&per_page=' + n;
+  const res = _request('get', path, null);
+  const page = res.body || [];
+  const out = [];
+  for (let i = 0; i < page.length; i++) {
+    const c = page[i];
+    const commit = c.commit || {};
+    const a = commit.author || {};
+    out.push({
+      sha: c.sha,
+      message: commit.message || '',
+      author: a.name || (c.author && c.author.login) || '',
+    });
+  }
+  return out;
 }
 
 function getCommit(owner, repo, sha) {

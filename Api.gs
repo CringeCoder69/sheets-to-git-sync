@@ -85,8 +85,27 @@ function apiCommit(req) {
     if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
     const branch = req && typeof req.branch === 'string' ? req.branch.trim() : '';
     const message = req && typeof req.message === 'string' ? req.message.trim() : '';
+    const expectedParentSha = req && typeof req.expectedParentSha === 'string' ? req.expectedParentSha.trim() : '';
     if (!branch) throw { name: 'AppError', message: 'branch is required', code: 'BadInput' };
     if (!message) throw { name: 'AppError', message: 'commit message is required', code: 'BadInput' };
-    return commitSnapshot({ owner: binding.owner, repo: binding.name, branch: branch, message: message });
+    if (!expectedParentSha) throw { name: 'AppError', message: 'expectedParentSha is required', code: 'BadInput' };
+    return commitSnapshot({
+      owner: binding.owner,
+      repo: binding.name,
+      branch: branch,
+      expectedParentSha: expectedParentSha,
+      message: message,
+    });
+  });
+}
+
+function apiGetGraph(req) {
+  return _wrap(function () {
+    if (!getPat()) throw { name: 'AppError', message: 'PAT is not set', code: 'NoPat' };
+    const binding = getRepoBinding();
+    if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
+    const branch = req && typeof req.branch === 'string' ? req.branch.trim() : '';
+    if (!branch) throw { name: 'AppError', message: 'branch is required', code: 'BadInput' };
+    return getCommitGraph({ owner: binding.owner, repo: binding.name, branch: branch });
   });
 }

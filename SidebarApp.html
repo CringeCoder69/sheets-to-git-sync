@@ -8,7 +8,9 @@
     repoFilter: '',
     branches: null,
     selectedBranch: null,
-    lastCommitSha: null,
+    commits: null,
+    headSha: null,
+    graphLoading: false,
     modal: null,
     modalError: null,
     committing: false,
@@ -30,10 +32,6 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
-
-  function shortSha(sha) {
-    return sha ? String(sha).slice(0, 7) : '';
   }
 
   function setState(patch) {
@@ -170,14 +168,10 @@
       ].join('');
     }
 
-    const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch;
+    const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch && state.headSha;
     const commitBtnHtml =
       '<button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') +
       ' style="align-self:flex-start">Commit current sheet…</button>';
-
-    const statusHtml = state.lastCommitSha
-      ? '<p class="status">Committed <code>' + esc(shortSha(state.lastCommitSha)) + '</code></p>'
-      : '';
 
     root.innerHTML = [
       bannerHtml(),
@@ -189,8 +183,8 @@
       '  </div>',
       '</div>',
       branchHtml,
+      renderGraphPlaceholderHtml(),
       commitBtnHtml,
-      statusHtml,
       state.modal === 'commit' ? commitModalHtml() : '',
     ].join('');
 
@@ -213,12 +207,15 @@
 
     const select = document.getElementById('branch-select');
     if (select) {
-      select.onchange = e => setState({ selectedBranch: e.target.value });
+      select.onchange = e => {
+        setState({ selectedBranch: e.target.value, commits: null, headSha: null });
+        loadGraph();
+      };
     }
     const refreshBtn = document.getElementById('branch-refresh');
     if (refreshBtn) {
       refreshBtn.onclick = () => {
-        setState({ branches: null, selectedBranch: null });
+        setState({ branches: null, selectedBranch: null, commits: null, headSha: null });
         loadBranches();
       };
     }
@@ -233,6 +230,40 @@
     }
 
     if (state.modal === 'commit') wireCommitModal();
+
+    mountGraph();
+  }
+
+  function renderGraphPlaceholderHtml() {
+    if (state.commits === null || state.graphLoading) {
+      return '<div id="graph" class="graph"><p class="muted">Loading graph…</p></div>';
+    }
+    if (state.commits.length === 0) {
+      return '<div id="graph" class="graph"><p class="muted">No commits on this branch yet.</p></div>';
+    }
+    return '<div id="graph" class="graph"></div>';
+  }
+
+  function mountGraph() {
+    if (!state.commits || state.commits.length === 0) return;
+    const container = document.getElementById('graph');
+    if (!container) return;
+    const gitgraph = GitgraphJS.createGitgraph(container, {
+      template: GitgraphJS.TemplateName.Metro,
+      orientation: GitgraphJS.Orientation.VerticalReverse,
+    });
+    const branch = gitgraph.branch(state.selectedBranch || 'main');
+    const ordered = state.commits.slice().reverse();
+    for (let i = 0; i < ordered.length; i++) {
+      const c = ordered[i];
+      const isHead = (c.sha === state.headSha);
+      branch.commit({
+        subject: c.message,
+        hash: c.sha,
+        author: c.author,
+        tag: isHead ? 'HEAD' : undefined,
+      });
+    }
   }
 
   function commitModalHtml() {
@@ -286,15 +317,21 @@
         if (!msg) return;
         setState({ committing: true, modalError: null });
         try {
-          const data = await call('apiCommit', { branch: state.selectedBranch, message: msg });
+          await call('apiCommit', {
+            branch: state.selectedBranch,
+            expectedParentSha: state.headSha,
+            message: msg,
+          });
           setState({
             committing: false,
             modal: null,
             modalError: null,
             commitMessage: '',
-            lastCommitSha: data.newSha,
+            commits: null,
+            headSha: null,
             error: null,
           });
+          loadGraph();
         } catch (err) {
           setState({
             committing: false,
@@ -332,16 +369,40 @@
     try {
       const data = await call('apiListBranches');
       const branches = data.branches || [];
+      const selected = branches.length ? branches[0].name : null;
       setState({
         branches: branches,
-        selectedBranch: branches.length ? branches[0].name : null,
+        selectedBranch: selected,
+        commits: null,
+        headSha: null,
         error: null,
       });
+      if (selected) loadGraph();
     } catch (err) {
       setState({
         branches: [],
         selectedBranch: null,
         error: (err && err.message) || 'Failed to load branches',
+      });
+    }
+  }
+
+  async function loadGraph() {
+    if (!state.selectedBranch) return;
+    setState({ graphLoading: true, error: null });
+    try {
+      const data = await call('apiGetGraph', { branch: state.selectedBranch });
+      setState({
+        commits: data.commits || [],
+        headSha: data.head || null,
+        graphLoading: false,
+      });
+    } catch (err) {
+      setState({
+        commits: [],
+        headSha: null,
+        graphLoading: false,
+        error: (err && err.message) || 'Failed to load graph',
       });
     }
   }
@@ -369,7 +430,9 @@
       repoFilter: '',
       branches: null,
       selectedBranch: null,
-      lastCommitSha: null,
+      commits: null,
+      headSha: null,
+      graphLoading: false,
       modal: null,
       modalError: null,
       commitMessage: '',
