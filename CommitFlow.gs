@@ -5,8 +5,7 @@ function commitSnapshot(req) {
   const repo = req.repo;
   const branch = req.branch;
   const message = req.message;
-
-  const parentSha = getRef(owner, repo, branch).sha;
+  const parentSha = req.expectedParentSha;
 
   const snapshot = serializeActiveSpreadsheet();
   const content = JSON.stringify(snapshot, null, 2);
