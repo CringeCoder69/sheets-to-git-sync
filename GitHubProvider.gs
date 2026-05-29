@@ -123,6 +123,19 @@ function getCommit(owner, repo, sha) {
   };
 }
 
+function getContents(owner, repo, path, ref) {
+  const res = _request('get', '/repos/' + owner + '/' + repo + '/contents/' + path +
+    '?ref=' + encodeURIComponent(ref), null);
+  const b = res.body;
+  return { sha: b.sha, size: b.size, encoding: b.encoding, content: b.content };
+}
+
+function getBlob(owner, repo, sha) {
+  const res = _request('get', '/repos/' + owner + '/' + repo + '/git/blobs/' + sha, null);
+  const b = res.body;
+  return { sha: b.sha, size: b.size, encoding: b.encoding, content: b.content };
+}
+
 function createBlob(owner, repo, content) {
   const res = _request('post', '/repos/' + owner + '/' + repo + '/git/blobs', {
     content: content,
