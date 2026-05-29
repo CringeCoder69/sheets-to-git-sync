@@ -10,11 +10,14 @@
     selectedBranch: null,
     commits: null,
     headSha: null,
+    selectedSha: null,
     graphLoading: false,
     modal: null,
     modalError: null,
     committing: false,
     commitMessage: '',
+    resetting: false,
+    resetTarget: null,
     error: null,
   };
 
@@ -169,9 +172,16 @@
     }
 
     const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch && state.headSha;
-    const commitBtnHtml =
-      '<button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') +
-      ' style="align-self:flex-start">Commit current sheet…</button>';
+    const canResetSelected = !!(state.selectedSha && state.selectedSha !== state.headSha);
+    const canResetTip = !!state.headSha;
+    const actionsHtml = [
+      '<div class="button-row">',
+      '  <button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') + '>Commit current sheet…</button>',
+      '  <button class="secondary" id="reset-selected-btn"' + (canResetSelected ? '' : ' disabled') + '>Reset to selected…</button>',
+      '  <button class="secondary" id="reset-tip-btn"' + (canResetTip ? '' : ' disabled') + '>Reset to branch tip</button>',
+      '</div>',
+      '<p class="muted" id="selection-status">' + selectionStatusText() + '</p>',
+    ].join('');
 
     root.innerHTML = [
       bannerHtml(),
@@ -184,8 +194,9 @@
       '</div>',
       branchHtml,
       renderGraphPlaceholderHtml(),
-      commitBtnHtml,
+      actionsHtml,
       state.modal === 'commit' ? commitModalHtml() : '',
+      state.modal === 'reset' ? resetModalHtml() : '',
     ].join('');
 
     document.getElementById('unbind').onclick = async () => {
@@ -208,14 +219,14 @@
     const select = document.getElementById('branch-select');
     if (select) {
       select.onchange = e => {
-        setState({ selectedBranch: e.target.value, commits: null, headSha: null });
+        setState({ selectedBranch: e.target.value, commits: null, headSha: null, selectedSha: null });
         loadGraph();
       };
     }
     const refreshBtn = document.getElementById('branch-refresh');
     if (refreshBtn) {
       refreshBtn.onclick = () => {
-        setState({ branches: null, selectedBranch: null, commits: null, headSha: null });
+        setState({ branches: null, selectedBranch: null, commits: null, headSha: null, selectedSha: null });
         loadBranches();
       };
     }
@@ -229,9 +240,44 @@
       });
     }
 
+    const resetSelectedBtn = document.getElementById('reset-selected-btn');
+    if (resetSelectedBtn) {
+      resetSelectedBtn.onclick = () => openResetModal(state.selectedSha);
+    }
+    const resetTipBtn = document.getElementById('reset-tip-btn');
+    if (resetTipBtn) {
+      resetTipBtn.onclick = () => openResetModal(state.headSha);
+    }
+
     if (state.modal === 'commit') wireCommitModal();
+    if (state.modal === 'reset') wireResetModal();
 
     mountGraph();
+  }
+
+  function selectionStatusText() {
+    if (!state.selectedSha) return 'Click a commit to select it.';
+    const isHead = state.selectedSha === state.headSha;
+    return 'Selected: ' + state.selectedSha.slice(0, 7) + (isHead ? ' (HEAD)' : '');
+  }
+
+  function refreshResetControls() {
+    const status = document.getElementById('selection-status');
+    if (status) status.textContent = selectionStatusText();
+    const resetSelectedBtn = document.getElementById('reset-selected-btn');
+    if (resetSelectedBtn) {
+      resetSelectedBtn.disabled = !(state.selectedSha && state.selectedSha !== state.headSha);
+    }
+  }
+
+  function openResetModal(sha) {
+    if (!sha) return;
+    const commit = (state.commits || []).find(c => c.sha === sha);
+    setState({
+      modal: 'reset',
+      modalError: null,
+      resetTarget: { ref: sha, sha: sha, message: commit ? commit.message : '' },
+    });
   }
 
   function renderGraphPlaceholderHtml() {
@@ -257,11 +303,13 @@
     for (let i = 0; i < ordered.length; i++) {
       const c = ordered[i];
       const isHead = (c.sha === state.headSha);
+      const sha = c.sha;
       branch.commit({
         subject: c.message,
         hash: c.sha,
         author: c.author,
         tag: isHead ? 'HEAD' : undefined,
+        onClick: function () { state.selectedSha = sha; refreshResetControls(); },
       });
     }
   }
@@ -329,6 +377,7 @@
             commitMessage: '',
             commits: null,
             headSha: null,
+            selectedSha: null,
             error: null,
           });
           loadGraph();
@@ -336,6 +385,58 @@
           setState({
             committing: false,
             modalError: (err && err.message) || 'Commit failed',
+          });
+        }
+      };
+    }
+  }
+
+  function resetModalHtml() {
+    const t = state.resetTarget || {};
+    const errHtml = state.modalError
+      ? '<div class="banner">' + esc(state.modalError) + '</div>'
+      : '';
+    return [
+      '<div class="modal-backdrop">',
+      '  <div class="modal">',
+      '    <h2>Reset to <code>' + esc((t.sha || '').slice(0, 7)) + '</code></h2>',
+      errHtml,
+      '    <p>' + esc((t.message || '').split('\n', 1)[0]) + '</p>',
+      '    <div class="warning">Local sheet changes will be overwritten and cannot be recovered.</div>',
+      '    <div class="modal-actions">',
+      '      <button class="secondary" id="reset-cancel"' + (state.resetting ? ' disabled' : '') + '>Cancel</button>',
+      '      <button class="primary" id="reset-confirm"' + (state.resetting ? ' disabled' : '') + '>',
+                state.resetting ? 'Resetting…' : 'Reset',
+      '      </button>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
+  function wireResetModal() {
+    const confirmBtn = document.getElementById('reset-confirm');
+    const cancelBtn = document.getElementById('reset-cancel');
+
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        if (state.resetting) return;
+        setState({ modal: null, modalError: null, resetTarget: null });
+      };
+    }
+    if (confirmBtn) {
+      confirmBtn.onclick = async () => {
+        const target = state.resetTarget;
+        if (!target || !target.ref) return;
+        setState({ resetting: true, modalError: null });
+        try {
+          await call('apiCheckout', { ref: target.ref });
+          // checkout creates no commit → graph history is unchanged, no reload needed
+          setState({ resetting: false, modal: null, resetTarget: null, error: null });
+        } catch (err) {
+          setState({
+            resetting: false,
+            modalError: (err && err.message) || 'Reset failed',
           });
         }
       };
@@ -375,6 +476,7 @@
         selectedBranch: selected,
         commits: null,
         headSha: null,
+        selectedSha: null,
         error: null,
       });
       if (selected) loadGraph();
@@ -432,11 +534,14 @@
       selectedBranch: null,
       commits: null,
       headSha: null,
+      selectedSha: null,
       graphLoading: false,
       modal: null,
       modalError: null,
       commitMessage: '',
       committing: false,
+      resetting: false,
+      resetTarget: null,
     };
   }
 

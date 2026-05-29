@@ -109,3 +109,14 @@ function apiGetGraph(req) {
     return getCommitGraph({ owner: binding.owner, repo: binding.name, branch: branch });
   });
 }
+
+function apiCheckout(req) {
+  return _wrap(function () {
+    if (!getPat()) throw { name: 'AppError', message: 'PAT is not set', code: 'NoPat' };
+    const binding = getRepoBinding();
+    if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
+    const ref = req && typeof req.ref === 'string' ? req.ref.trim() : '';
+    if (!ref) throw { name: 'AppError', message: 'ref is required', code: 'BadInput' };
+    return checkoutCommit({ owner: binding.owner, repo: binding.name, ref: ref });
+  });
+}
