@@ -11,6 +11,7 @@ function getCommitGraph(req) {
       sha: c.sha,
       message: (c.message || '').split('\n', 1)[0],
       author: c.author,
+      date: c.date,
     };
   });
 
