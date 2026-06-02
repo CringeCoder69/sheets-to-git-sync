@@ -172,15 +172,10 @@
     }
 
     const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch && state.headSha;
-    const canResetSelected = !!(state.selectedSha && state.selectedSha !== state.headSha);
-    const canResetTip = !!state.headSha;
     const actionsHtml = [
       '<div class="button-row">',
       '  <button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') + '>Commit current sheet…</button>',
-      '  <button class="secondary" id="reset-selected-btn"' + (canResetSelected ? '' : ' disabled') + '>Reset to selected…</button>',
-      '  <button class="secondary" id="reset-tip-btn"' + (canResetTip ? '' : ' disabled') + '>Reset to branch tip</button>',
       '</div>',
-      '<p class="muted" id="selection-status">' + selectionStatusText() + '</p>',
     ].join('');
 
     root.innerHTML = [
@@ -240,40 +235,17 @@
       });
     }
 
-    const resetSelectedBtn = document.getElementById('reset-selected-btn');
-    if (resetSelectedBtn) {
-      resetSelectedBtn.onclick = () => openResetModal(state.selectedSha);
-    }
-    const resetTipBtn = document.getElementById('reset-tip-btn');
-    if (resetTipBtn) {
-      resetTipBtn.onclick = () => openResetModal(state.headSha);
-    }
-
     if (state.modal === 'commit') wireCommitModal();
     if (state.modal === 'reset') wireResetModal();
 
     mountGraph();
   }
 
-  function selectionStatusText() {
-    if (!state.selectedSha) return 'Click a commit to select it.';
-    const isHead = state.selectedSha === state.headSha;
-    return 'Selected: ' + state.selectedSha.slice(0, 7) + (isHead ? ' (HEAD)' : '');
-  }
-
-  function refreshResetControls() {
-    const status = document.getElementById('selection-status');
-    if (status) status.textContent = selectionStatusText();
-    const resetSelectedBtn = document.getElementById('reset-selected-btn');
-    if (resetSelectedBtn) {
-      resetSelectedBtn.disabled = !(state.selectedSha && state.selectedSha !== state.headSha);
-    }
-  }
-
   function openResetModal(sha) {
     if (!sha) return;
     const commit = (state.commits || []).find(c => c.sha === sha);
     setState({
+      selectedSha: sha,
       modal: 'reset',
       modalError: null,
       resetTarget: { ref: sha, sha: sha, message: commit ? commit.message : '' },
@@ -317,6 +289,10 @@
       circle.setAttribute('cy', String(r));
       circle.setAttribute('r', String(r));
       circle.setAttribute('fill', commit.style.dot.color || '');
+      if (raw.sha === state.selectedSha) {
+        circle.setAttribute('stroke', '#1a73e8');   // accent, matches button.primary
+        circle.setAttribute('stroke-width', '3');
+      }
       g.appendChild(circle);
 
       // Two-line native tooltip: message, then author · hash · date.
@@ -329,7 +305,7 @@
       title.textContent = raw.message + '\n' + meta.join(' · ');
       g.appendChild(title);
 
-      if (commit.onClick) g.addEventListener('click', commit.onClick);
+      if (commit.onClick) g.addEventListener('dblclick', commit.onClick);
       return g;
     }
     const gitgraph = GitgraphJS.createGitgraph(container, {
@@ -352,7 +328,7 @@
         author: c.author,
         tag: isHead ? 'HEAD' : undefined,
         renderDot: function (commit) { return renderDot(commit, c); },
-        onClick: function () { state.selectedSha = sha; refreshResetControls(); },
+        onClick: function () { openResetModal(sha); },
       });
     }
   }
