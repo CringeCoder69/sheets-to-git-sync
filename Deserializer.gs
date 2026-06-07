@@ -9,6 +9,12 @@ function applySnapshot(snapshot) {
   if (names.length === 0) throw { name: 'AppError', code: 'BadSnapshot', message: 'Snapshot has no sheets' };
 
   const ss = SpreadsheetApp.getActive();
+
+  // remember where the user was, to restore after the reorder churn below
+  const prevSheetName = ss.getActiveSheet().getName();
+  const prevSel = ss.getActiveRange();
+  const prevSelA1 = prevSel ? prevSel.getA1Notation() : null;
+
   const existing = {};
   ss.getSheets().forEach(function (s) { existing[s.getName()] = s; });
 
@@ -28,6 +34,14 @@ function applySnapshot(snapshot) {
 
   // reorder to snapshot key order (tab order)
   names.forEach(function (name, i) { ss.setActiveSheet(existing[name]); ss.moveActiveSheet(i + 1); });
+
+  // restore the user's tab + cell selection (the reorder above left Globals active);
+  // fall back to the first sheet if the previous one no longer exists in the snapshot
+  const target = existing[prevSheetName] || existing[names[0]];
+  ss.setActiveSheet(target);
+  if (target.getName() === prevSheetName && prevSelA1) {
+    ss.setActiveSelection(target.getRange(prevSelA1));
+  }
 }
 
 function cellToSheetValue_(cell) {
