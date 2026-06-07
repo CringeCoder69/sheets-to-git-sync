@@ -245,7 +245,6 @@
     if (!sha) return;
     const commit = (state.commits || []).find(c => c.sha === sha);
     setState({
-      selectedSha: sha,
       modal: 'reset',
       modalError: null,
       resetTarget: { ref: sha, sha: sha, message: commit ? commit.message : '' },
@@ -451,7 +450,7 @@
         try {
           await call('apiCheckout', { ref: target.ref });
           // checkout creates no commit → graph history is unchanged, no reload needed
-          setState({ resetting: false, modal: null, resetTarget: null, error: null });
+          setState({ resetting: false, modal: null, resetTarget: null, selectedSha: target.sha, error: null });
         } catch (err) {
           setState({
             resetting: false,
