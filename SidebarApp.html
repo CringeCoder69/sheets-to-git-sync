@@ -149,29 +149,9 @@
   function renderReady() {
     const b = state.repoBinding || {};
 
-    let branchHtml;
-    if (state.branches === null) {
-      branchHtml = '<p class="muted">Loading branches…</p>';
-    } else if (state.branches.length === 0) {
-      branchHtml = '<p class="muted">No branches in this repository.</p>';
-    } else {
-      const opts = state.branches.map(br =>
-        '<option value="' + esc(br.name) + '"' +
-        (br.name === state.selectedBranch ? ' selected' : '') +
-        '>' + esc(br.name) + '</option>'
-      ).join('');
-      branchHtml = [
-        '<div class="field">',
-        '  <label for="branch-select">Branch</label>',
-        '  <div class="row">',
-        '    <select id="branch-select">' + opts + '</select>',
-        '    <button class="secondary" id="branch-refresh">Refresh</button>',
-        '  </div>',
-        '</div>',
-      ].join('');
-    }
-
-    const canCommit = state.branches && state.branches.length > 0 && state.selectedBranch && state.headSha;
+    // Branches load lazily when the commit modal opens; the sidebar shows only
+    // the cross-branch graph. Commit is enabled once the graph has loaded.
+    const canCommit = !state.graphLoading && state.commits !== null;
     const actionsHtml = [
       '<div class="button-row">',
       '  <button class="primary" id="commit-btn"' + (canCommit ? '' : ' disabled') + '>Commit current sheet…</button>',
@@ -187,7 +167,6 @@
       '    <a id="signout">Sign out</a>',
       '  </div>',
       '</div>',
-      branchHtml,
       renderGraphPlaceholderHtml(),
       actionsHtml,
       state.modal === 'commit' ? commitModalHtml() : '',
@@ -211,28 +190,14 @@
       }
     };
 
-    const select = document.getElementById('branch-select');
-    if (select) {
-      select.onchange = e => {
-        setState({ selectedBranch: e.target.value, commits: null, headSha: null, selectedSha: null });
-        loadGraph();
-      };
-    }
-    const refreshBtn = document.getElementById('branch-refresh');
-    if (refreshBtn) {
-      refreshBtn.onclick = () => {
-        setState({ branches: null, selectedBranch: null, commits: null, headSha: null, selectedSha: null });
-        loadBranches();
-      };
-    }
-
     const commitBtn = document.getElementById('commit-btn');
     if (commitBtn) {
-      commitBtn.onclick = () => setState({
-        modal: 'commit',
-        modalError: null,
-        commitMessage: '',
-      });
+      commitBtn.onclick = () => {
+        // Lazily fetch branches the first time the modal is opened; the modal
+        // shows its own loading state until they arrive.
+        if (state.branches === null) loadBranches();
+        setState({ modal: 'commit', modalError: null, commitMessage: '' });
+      };
     }
 
     if (state.modal === 'commit') wireCommitModal();
@@ -265,11 +230,13 @@
     if (!state.commits || state.commits.length === 0) return;
     const container = document.getElementById('graph');
     if (!container) return;
-    // Compact mode hides the inline commit messages, keeping the graph narrow.
-    // The message is shown via a custom dot: a plain circle (matching the
-    // default look) plus an SVG <title>, which the browser renders as a native
-    // tooltip on hover — it never overflows the sidebar like GitgraphJS's own
-    // SVG tooltip did. Providing renderDot also bypasses that built-in tooltip.
+    // Default (non-compact) mode gives each commit its own row, so commits
+    // from different branches don't get packed onto the same level and every
+    // branch tip gets its label. The message is shown via a custom dot: a
+    // plain circle (matching the default look) plus an SVG <title>, which the
+    // browser renders as a native tooltip on hover — it never overflows the
+    // sidebar like GitgraphJS's own SVG tooltip did. Providing renderDot also
+    // bypasses that built-in tooltip.
     const SVG_NS = 'http://www.w3.org/2000/svg';
     function formatDate(iso) {
       if (!iso) return '';
@@ -304,43 +271,53 @@
       title.textContent = raw.message + '\n' + meta.join(' · ');
       g.appendChild(title);
 
-      if (commit.onClick) g.addEventListener('dblclick', commit.onClick);
+      if (commit.onClick) g.addEventListener('click', commit.onClick);
       return g;
     }
-    const gitgraph = GitgraphJS.createGitgraph(container, {
-      template: GitgraphJS.TemplateName.Metro,
-      orientation: GitgraphJS.Orientation.Vertical,
-      mode: GitgraphJS.Mode.Compact,
+    // Suppress the inline message line entirely (author, hash, subject) — all
+    // commit info lives in the native hover tooltip built in renderDot instead.
+    const template = GitgraphJS.templateExtend(GitgraphJS.TemplateName.Metro, {
+      commit: {
+        message: { display: false, displayAuthor: false, displayHash: false },
+      },
     });
-    const branch = gitgraph.branch(state.selectedBranch || 'main');
-    // Default Vertical renders the last-added commit at the top. Add oldest
-    // first so the newest commit (branch tip) ends up on top, and the branch
-    // label + HEAD tag attach to it.
-    const ordered = state.commits.slice().reverse();
-    for (let i = 0; i < ordered.length; i++) {
-      const c = ordered[i];
-      const isHead = (c.sha === state.headSha);
-      const sha = c.sha;
-      branch.commit({
-        subject: c.message,
+    const gitgraph = GitgraphJS.createGitgraph(container, {
+      template: template,
+      orientation: GitgraphJS.Orientation.Vertical,
+    });
+    // Build the full DAG from all branches via gitgraph.import(). It expects
+    // newest-first data (and reverses internally), spreads each element into
+    // the Commit constructor (so renderDot/onClick are preserved), draws the
+    // DAG from `parents`, and renders branch labels from `refs`. Note: import
+    // requires `author` to be an object and `refs` to be an array.
+    const data = state.commits.map(function (c) {
+      return {
         hash: c.sha,
-        author: c.author,
-        tag: isHead ? 'HEAD' : undefined,
+        parents: c.parents || [],
+        subject: '',
+        author: { name: c.author || '', email: '' },
+        refs: c.refs || [],
         renderDot: function (commit) { return renderDot(commit, c); },
-        onClick: function () { openResetModal(sha); },
-      });
-    }
+        onClick: function () { openResetModal(c.sha); },
+      };
+    });
+    gitgraph.import(data);
   }
 
   function commitModalHtml() {
     const errHtml = state.modalError
       ? '<div class="banner">' + esc(state.modalError) + '</div>'
       : '';
-    const disableCommit = state.committing || !state.commitMessage.trim();
+    const branchesLoading = state.branches === null;
+    const disableCommit = state.committing || branchesLoading
+      || !state.selectedBranch || !state.commitMessage.trim();
+    const targetHtml = branchesLoading
+      ? 'Commit <span class="muted">(loading branches…)</span>'
+      : 'Commit to <code>' + esc(state.selectedBranch || '') + '</code>';
     return [
       '<div class="modal-backdrop">',
       '  <div class="modal">',
-      '    <h2>Commit to <code>' + esc(state.selectedBranch || '') + '</code></h2>',
+      '    <h2>' + targetHtml + '</h2>',
       errHtml,
       '    <div class="field">',
       '      <label for="commit-message">Message</label>',
@@ -365,7 +342,8 @@
     if (messageEl) {
       messageEl.oninput = e => {
         state.commitMessage = e.target.value;
-        confirmBtn.disabled = state.committing || !state.commitMessage.trim();
+        confirmBtn.disabled = state.committing || state.branches === null
+          || !state.selectedBranch || !state.commitMessage.trim();
       };
       messageEl.focus();
       const len = messageEl.value.length;
@@ -381,11 +359,15 @@
       confirmBtn.onclick = async () => {
         const msg = (state.commitMessage || '').trim();
         if (!msg) return;
+        // Parent is the tip of the selected branch (from state.branches),
+        // which must match the branch tip on the server for the fast-forward
+        // updateRef (force:false) to succeed.
+        const tip = (state.branches || []).find(b => b.name === state.selectedBranch);
         setState({ committing: true, modalError: null });
         try {
           await call('apiCommit', {
             branch: state.selectedBranch,
-            expectedParentSha: state.headSha,
+            expectedParentSha: tip && tip.sha,
             message: msg,
           });
           setState({
@@ -398,7 +380,10 @@
             selectedSha: null,
             error: null,
           });
+          // The branch tip moved — refresh the graph and reload branches
+          // (preserving selection) so the next commit uses the fresh tip.
           loadGraph();
+          loadBranches();
         } catch (err) {
           setState({
             committing: false,
@@ -488,16 +473,18 @@
     try {
       const data = await call('apiListBranches');
       const branches = data.branches || [];
-      const selected = branches.length ? branches[0].name : null;
+      // Preserve the current selection if the branch still exists (so a commit
+      // can keep targeting the same branch); otherwise default to the first.
+      const selected = (state.selectedBranch && branches.some(b => b.name === state.selectedBranch))
+        ? state.selectedBranch
+        : (branches.length ? branches[0].name : null);
+      // Branches feed only the commit flow now (target + tip sha); the graph
+      // loads independently via loadGraph(), so don't touch graph state here.
       setState({
         branches: branches,
         selectedBranch: selected,
-        commits: null,
-        headSha: null,
-        selectedSha: null,
         error: null,
       });
-      if (selected) loadGraph();
     } catch (err) {
       setState({
         branches: [],
@@ -508,13 +495,13 @@
   }
 
   async function loadGraph() {
-    if (!state.selectedBranch) return;
     setState({ graphLoading: true, error: null });
     try {
-      const data = await call('apiGetGraph', { branch: state.selectedBranch });
+      // The graph spans all branches; no branch argument needed.
+      const data = await call('apiGetGraph');
       setState({
         commits: data.commits || [],
-        headSha: data.head || null,
+        headSha: null,
         graphLoading: false,
       });
     } catch (err) {
@@ -566,7 +553,7 @@
   function onEnter(name) {
     if (name === 'BOOT') bootstrap();
     else if (name === 'NEED_REPO' && state.repos === null) loadRepos();
-    else if (name === 'READY' && state.branches === null) loadBranches();
+    else if (name === 'READY' && state.commits === null) loadGraph();
   }
 
   render();

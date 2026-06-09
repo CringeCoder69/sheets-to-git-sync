@@ -108,6 +108,7 @@ function listCommits(owner, repo, branch, perPage) {
       message: commit.message || '',
       author: a.name || (c.author && c.author.login) || '',
       date: a.date || '',
+      parents: (c.parents || []).map(function (p) { return p.sha; }),
     });
   }
   return out;
