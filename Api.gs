@@ -104,9 +104,7 @@ function apiGetGraph(req) {
     if (!getPat()) throw { name: 'AppError', message: 'PAT is not set', code: 'NoPat' };
     const binding = getRepoBinding();
     if (!binding) throw { name: 'AppError', message: 'Repo not bound', code: 'NoBinding' };
-    const branch = req && typeof req.branch === 'string' ? req.branch.trim() : '';
-    if (!branch) throw { name: 'AppError', message: 'branch is required', code: 'BadInput' };
-    return getCommitGraph({ owner: binding.owner, repo: binding.name, branch: branch });
+    return getCommitGraph({ owner: binding.owner, repo: binding.name });
   });
 }
 
